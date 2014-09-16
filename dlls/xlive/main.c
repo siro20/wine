@@ -394,7 +394,7 @@ INT WINAPI XNetStartup(XNetStartupParams * p) {
     
     //WARNING::: TEMPORARY HACK TO LOG RE5 internal stuff, hopefully xlive is initialized before xliveinit
     
-    
+    #if 0
     if ( curr_titleId == 0xc7db11d3 )
     {
         DWORD handle = (DWORD)GetModuleHandleA(NULL);
@@ -433,6 +433,7 @@ INT WINAPI XNetStartup(XNetStartupParams * p) {
         FIXME("memory patch has to be applied on %p, new address : %p\n",ptr3,&Re5Log);
         *(void**)(ptr3) = (void*)&Re5Log0x20;
     }
+    #endif
     MatchMakingStartup();
     return 0;
 }
