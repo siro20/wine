@@ -21452,6 +21452,1242 @@ done:
     DestroyWindow(window);
 }
 
+static const char *debug_d3dpool(D3DPOOL pool)
+{
+    switch (pool)
+    {
+        case D3DPOOL_DEFAULT:
+            return "D3DPOOL_DEFAULT";
+        case D3DPOOL_SYSTEMMEM:
+            return "D3DPOOL_SYSTEMMEM";
+        case D3DPOOL_SCRATCH:
+            return "D3DPOOL_SCRATCH";
+        case D3DPOOL_MANAGED:
+            return "D3DPOOL_MANAGED";
+        default:
+            return "unknown pool";
+    }
+}
+
+static char debug_string[255];
+static const char *debug_lock_flags(unsigned int flags)
+{
+    int first = 1;
+    strcpy(debug_string, "0 ");
+
+    if (flags & D3DLOCK_READONLY) {
+        if (!first)
+            strcat(debug_string, "| ");
+        first = 0;
+        strcat(debug_string, "D3DLOCK_READONLY ");
+    }
+    if (flags & D3DLOCK_DISCARD) {
+        if (!first)
+            strcat(debug_string, "| ");
+        first = 0;
+
+        strcat(debug_string, "D3DLOCK_DISCARD ");
+    }
+    if (flags & D3DLOCK_NOOVERWRITE) {
+        if (!first)
+            strcat(debug_string, "| ");
+        first = 0;
+
+        strcat(debug_string, "D3DLOCK_NOOVERWRITE ");
+    }
+    if (flags & D3DLOCK_NO_DIRTY_UPDATE) {
+        if (!first)
+            strcat(debug_string, "| ");
+        first = 0;
+
+        strcat(debug_string, "D3DLOCK_NO_DIRTY_UPDATE ");
+    }
+    if (flags & D3DLOCK_DONOTWAIT) {
+        if (!first)
+            strcat(debug_string, "| ");
+        first = 0;
+
+        strcat(debug_string, "D3DLOCK_DONOTWAIT ");
+    }
+    if (flags & D3DLOCK_NOSYSLOCK) {
+        if (!first)
+            strcat(debug_string, "| ");
+        first = 0;
+
+        strcat(debug_string, "D3DLOCK_NOSYSLOCK ");
+    }
+    return debug_string;
+}
+
+
+static void test_vb_lock_flags(void)
+{
+    IDirect3DVertexBuffer9 *buffer;
+    IDirect3DDevice9 *device;
+    IDirect3D9 *d3d9;
+    unsigned int i, j, pool;
+    ULONG refcount;
+    HWND window;
+    HRESULT hr;
+    unsigned char *data, *data2;
+    struct surface_readback rb;
+    IDirect3DSurface9 *backbuffer;
+    unsigned int lock_flags, usage_flags;
+    D3DCOLOR color = 0;
+    D3DPOOL d3dpool;
+
+    static const struct
+    {
+        struct vec3 position;
+        DWORD diffuse;
+    }
+    quad_strip[] =
+    {
+        {{-1.0f, -1.0f, 0.0f}, 0xffff0000},
+        {{-1.0f,  1.0f, 0.0f}, 0xff00ff00},
+        {{ 1.0f, -1.0f, 0.0f}, 0xff0000ff},
+        {{ 1.0f,  1.0f, 0.0f}, 0xffffffff},
+    },
+    quad_strip2[] =
+    {
+        {{-1.0f, -1.0f, 0.0f}, 0xff0000ff},
+        {{-1.0f,  1.0f, 0.0f}, 0xff0000ff},
+        {{ 1.0f, -1.0f, 0.0f}, 0xffff0000},
+        {{ 1.0f,  1.0f, 0.0f}, 0xffff0000},
+    },
+    quad_strip3[] =
+    {
+        {{-1.0f, -1.0f, 0.0f}, 0xff000000},
+        {{-1.0f,  1.0f, 0.0f}, 0xff000000},
+        {{ 1.0f, -1.0f, 0.0f}, 0xff000000},
+        {{ 1.0f,  1.0f, 0.0f}, 0xff000000},
+    };
+    static const D3DPOOL get_pool[3] =
+    {
+        D3DPOOL_DEFAULT,
+        D3DPOOL_MANAGED,
+        D3DPOOL_SYSTEMMEM,
+    };
+
+    window = CreateWindowA("static", "d3d9_test", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            0, 0, 640, 480, NULL, NULL, NULL, NULL);
+    d3d9 = Direct3DCreate9(D3D_SDK_VERSION);
+    ok(!!d3d9, "Failed to create a D3D object.\n");
+    if (!(device = create_device(d3d9, window, window, TRUE)))
+    {
+        skip("Failed to create a D3D device.\n");
+        goto done;
+    }
+
+    hr = IDirect3DDevice9_GetBackBuffer(device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+    ok(hr == D3D_OK, "Can't get back buffer, hr %#x.\n", hr);
+
+    hr = IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE);
+    ok(hr == D3D_OK, "IDirect3DDevice9_SetRenderState returned %08x\n", hr);
+    hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGENABLE, FALSE);
+    ok(SUCCEEDED(hr), "Failed to disable fog, hr %#x.\n", hr);
+
+    hr = IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ | D3DFVF_DIFFUSE);
+    ok(hr == D3D_OK, "IDirect3DDevice9_SetFVF failed with %08x\n", hr);
+#if 0
+    /* Test shows that buffers start dirty:
+     *  The whole buffer is uploaded before first draw call.
+     * Test shows that D3DPOOL_DEFAULT and D3DPOOL_SYSTEMMEM are always
+     * locked RW and the whole buffer is uploaded.
+     * Test shows that D3DPOOL_MANAGED is always locked RW and only the region
+     * locked is marked dirty and uploaded (except after creation).
+     */
+    for (pool = 0; pool < 3; ++pool) {
+        d3dpool = get_pool[pool];
+        for (i = 0; i < 0x20; ++i) {
+            usage_flags = 0;
+            if (i & 0x8)
+                usage_flags |= D3DUSAGE_DYNAMIC;
+            if (i & 0x10)
+                usage_flags |= D3DUSAGE_WRITEONLY;
+
+            buffer = NULL;
+            hr = IDirect3DDevice9_CreateVertexBuffer(device, 0x10000, usage_flags, 0, d3dpool, &buffer, NULL);
+            if (usage_flags & D3DUSAGE_DYNAMIC && d3dpool == D3DPOOL_MANAGED)
+                todo_wine ok(!SUCCEEDED(hr), "Unexpected success to create vertex buffer, pool %s, usage_flags 0x%x, hr %#x.\n",
+                         debug_d3dpool(d3dpool), usage_flags, hr);
+            else
+                ok(SUCCEEDED(hr), "Failed to create vertex buffer, pool %s, usage 0x%x, hr %#x.\n",
+                                debug_d3dpool(d3dpool), usage_flags, hr);
+            if (FAILED(hr))
+                continue;
+
+            hr = IDirect3DDevice9_SetStreamSource(device, 0, buffer, 0, sizeof(quad_strip[0]));
+            ok(SUCCEEDED(hr), "Failed to set stream source, hr %#x.\n", hr);
+
+            lock_flags = 0;
+            if (i & 0x01)
+                lock_flags |= D3DLOCK_READONLY;
+            if (i & 0x02)
+                lock_flags |= D3DLOCK_NOOVERWRITE;
+            if (i & 0x04)
+                lock_flags |= D3DLOCK_NO_DIRTY_UPDATE;
+
+            /* assume the whole buffer is dirty at creation */
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0x1000, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            /* place test data at start of buffer, outside of locked area */
+            memcpy(data - 0x1000, quad_strip, sizeof(quad_strip));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_string);
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            /* lock some area, but leave start of buffer untouched */
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0x1000, 0x1000, (void **)&data, lock_flags);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+            memset(data, 0x55, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            /* write outside locked area, only locked area should be marked dirty */
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0x1000, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data - 0x1000, quad_strip2, sizeof(quad_strip2));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_DEFAULT || d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff7f007f, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                // nvidia driver returns 0xff007f7f
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            /* write outside locked area, only locked area should be marked dirty */
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0x1000, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data - 0x1000, quad_strip3, sizeof(quad_strip3));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_DEFAULT || d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff000000, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                // nvidia driver returns 0xff007f7f
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            IDirect3DVertexBuffer9_Release(buffer);
+        }
+    }
+#endif
+    /* Test shows that it is possible to draw using a locked buffer and no error is generated.
+     * For D3DPOOL_SYSTEMMEM the content of the buffer at draw call is used, for other
+     * pools it is possible that the upload takes longer than the draw call. (race condition) */
+    for (pool = 0; pool < 3; ++pool) {
+        d3dpool = get_pool[pool];
+        for (i = 0; i < 0x20; ++i) {
+            usage_flags = 0;
+            if (i & 0x8)
+                usage_flags |= D3DUSAGE_DYNAMIC;
+            if (i & 0x10)
+                usage_flags |= D3DUSAGE_WRITEONLY;
+
+            buffer = NULL;
+            hr = IDirect3DDevice9_CreateVertexBuffer(device, 0x10000, usage_flags, 0, d3dpool, &buffer, NULL);
+            if (usage_flags & D3DUSAGE_DYNAMIC && d3dpool == D3DPOOL_MANAGED)
+                todo_wine ok(!SUCCEEDED(hr), "Unexpected success to create vertex buffer, pool %s, usage_flags 0x%x, hr %#x.\n",
+                         debug_d3dpool(d3dpool), usage_flags, hr);
+            else
+                ok(SUCCEEDED(hr), "Failed to create vertex buffer, pool %s, usage 0x%x, hr %#x.\n",
+                                debug_d3dpool(d3dpool), usage_flags, hr);
+            if (FAILED(hr))
+                continue;
+
+            hr = IDirect3DDevice9_SetStreamSource(device, 0, buffer, 0, sizeof(quad_strip[0]));
+            ok(SUCCEEDED(hr), "Failed to set stream source, hr %#x.\n", hr);
+
+            lock_flags = 0;
+            if (i & 0x01)
+                lock_flags |= D3DLOCK_READONLY;
+            if (i & 0x02)
+                lock_flags |= D3DLOCK_NOOVERWRITE;
+            if (i & 0x04)
+                lock_flags |= D3DLOCK_NO_DIRTY_UPDATE;
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data, quad_strip, sizeof(quad_strip2));
+
+            /* draw while buffer is locked */
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            memcpy(data, quad_strip2, sizeof(quad_strip3));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff7f007f, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            /* Test with two draw calls */
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            /* draw while buffer is locked */
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            /* upload data after unlock */
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 2, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff7f007f, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            /* Test with only one draw call */
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            /* draw while buffer is locked */
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff7f007f, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            /* Test with a single IDirect3DDevice9_BeginScene  - IDirect3DDevice9_EndScene */
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            /* draw while buffer is locked */
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+
+            memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            /* upload data after unlock */
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 2, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff7f007f, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                     color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            /* Read color without unlocking buffer - fails hard on POOL_DEFAULT, so skip tests */
+            if (d3dpool == D3DPOOL_DEFAULT){
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            ok(color_match(color, 0, 1),
+                "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff7f007f, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            /* Write into unlocked memory - 1 */
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            /* Writing into unlocked memory !!! Lets hope that it is still there... */
+            memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff7f007f, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            /* Write into unlocked memory - 2 */
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            Sleep(10);
+
+            /* Writing into unlocked memory !!! Lets hope that it is still there... */
+            memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (d3dpool == D3DPOOL_SYSTEMMEM) {
+                ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff7f007f, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            /* Write into unlocked memory - 3 */
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            /* Writing into unlocked memory !!! Lets hope that it is still there... */
+            memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            ok(color_match(color, 0xff7f007f, 1),
+                "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            IDirect3DVertexBuffer9_Release(buffer);
+        }
+    }
+#if 0
+    /* Test shows that D3DLOCK_NO_DIRTY_UPDATE has no effect.
+     * Test shows that D3DLOCK_READONLY on D3DPOOL_MANAGED prevents dirty update. */
+    for (pool = 0; pool < 3; ++pool) {
+        d3dpool = get_pool[pool];
+        for (i = 0; i < 0x40; ++i) {
+            usage_flags = 0;
+            if (i & 0x10)
+                usage_flags |= D3DUSAGE_DYNAMIC;
+            if (i & 0x20)
+                usage_flags |= D3DUSAGE_WRITEONLY;
+
+            buffer = NULL;
+            hr = IDirect3DDevice9_CreateVertexBuffer(device, 0x10000, usage_flags, 0, d3dpool, &buffer, NULL);
+            if (usage_flags & D3DUSAGE_DYNAMIC && d3dpool == D3DPOOL_MANAGED)
+                todo_wine ok(!SUCCEEDED(hr), "Unexpected success to create vertex buffer, pool %s, usage_flags 0x%x, hr %#x.\n",
+                         debug_d3dpool(d3dpool), usage_flags, hr);
+            else
+                ok(SUCCEEDED(hr), "Failed to create vertex buffer, pool %s, usage 0x%x, hr %#x.\n",
+                                debug_d3dpool(d3dpool), usage_flags, hr);
+            if (FAILED(hr))
+                continue;
+
+            hr = IDirect3DDevice9_SetStreamSource(device, 0, buffer, 0, sizeof(quad_strip[0]));
+            ok(SUCCEEDED(hr), "Failed to set stream source, hr %#x.\n", hr);
+
+            lock_flags = 0;
+            if (i & 0x01)
+                lock_flags |= D3DLOCK_READONLY;
+            if (i & 0x02)
+                lock_flags |= D3DLOCK_DISCARD;
+            if (i & 0x04)
+                lock_flags |= D3DLOCK_NOOVERWRITE;
+            if (i & 0x08)
+                lock_flags |= D3DLOCK_NO_DIRTY_UPDATE;
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+            memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            if (pool == D3DPOOL_MANAGED && (lock_flags & D3DLOCK_READONLY)) {
+                ok(color_match(color, 0xff008080, 1),
+                        "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                        color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff7f007f, 1),
+                        "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                        color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            IDirect3DVertexBuffer9_Release(buffer);
+        }
+    }
+
+    /* Test shows that D3DLOCK_DISCARD has effect in D3DPOOL_DEFAULT */
+    for (pool = 0; pool < 3; ++pool) {
+        d3dpool = get_pool[pool];
+        for (i = 0; i < 0x40; ++i) {
+            usage_flags = 0;
+            if (i & 0x10)
+                usage_flags |= D3DUSAGE_DYNAMIC;
+            if (i & 0x20)
+                usage_flags |= D3DUSAGE_WRITEONLY;
+
+            buffer = NULL;
+            hr = IDirect3DDevice9_CreateVertexBuffer(device, 0x10000, usage_flags, 0, d3dpool, &buffer, NULL);
+            if (usage_flags & D3DUSAGE_DYNAMIC && d3dpool == D3DPOOL_MANAGED)
+                todo_wine ok(!SUCCEEDED(hr), "Unexpected success to create vertex buffer, pool %s, usage_flags 0x%x, hr %#x.\n",
+                         debug_d3dpool(d3dpool), usage_flags, hr);
+            else
+                ok(SUCCEEDED(hr), "Failed to create vertex buffer, pool %s, usage 0x%x, hr %#x.\n",
+                                debug_d3dpool(d3dpool), usage_flags, hr);
+            if (FAILED(hr))
+                continue;
+
+            hr = IDirect3DDevice9_SetStreamSource(device, 0, buffer, 0, sizeof(quad_strip[0]));
+            ok(SUCCEEDED(hr), "Failed to set stream source, hr %#x.\n", hr);
+
+            lock_flags = 0;
+            if (i & 0x01)
+                lock_flags |= D3DLOCK_READONLY;
+            if (i & 0x02)
+                lock_flags |= D3DLOCK_DISCARD;
+            if (i & 0x04)
+                lock_flags |= D3DLOCK_NOOVERWRITE;
+            if (i & 0x08)
+                lock_flags |= D3DLOCK_NO_DIRTY_UPDATE;
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr)) {
+                IDirect3DVertexBuffer9_Release(buffer);
+                continue;
+            }
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(0));
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            /* lock often to force buffer flip/discard the active buffer */
+            for (j = 0; j < 0xff; j++) {
+                data = NULL;
+                hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+                ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+                if (FAILED(hr))
+                    continue;
+
+                hr = IDirect3DVertexBuffer9_Unlock(buffer);
+                ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+                hr = IDirect3DDevice9_BeginScene(device);
+                ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+                hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+                ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+                hr = IDirect3DDevice9_EndScene(device);
+                ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+                get_rt_readback(backbuffer, &rb);
+                color = get_readback_color(&rb, 320, 240);
+                release_surface_readback(&rb);
+
+                hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+                ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+                if (color_match(color, 0xff000000, 1))
+                    break;
+            }
+            if (pool == D3DPOOL_DEFAULT) {
+                ok((color_match(color, 0xff000000, 1) && (lock_flags & D3DLOCK_DISCARD)) ||
+                   (color_match(color, 0xff008080, 1) && !(lock_flags & D3DLOCK_DISCARD)),
+                        "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                        color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff008080, 1),
+                        "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                        color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+
+            IDirect3DVertexBuffer9_Release(buffer);
+        }
+    }
+
+    /* Test shows that D3DLOCK_NOOVERWRITE has effect in D3DPOOL_DEFAULT
+     * Test shows that D3DLOCK_READONLY and D3DUSAGE_DYNAMIC in D3DPOOL_DEFAULT has
+     *  the same effect as D3DLOCK_NOOVERWRITE */
+    for (pool = 0; pool < 3; ++pool) {
+        d3dpool = get_pool[pool];
+        for (i = 0; i < 0x40; ++i) {
+            usage_flags = 0;
+            if (i & 0x10)
+                usage_flags |= D3DUSAGE_DYNAMIC;
+            if (i & 0x20)
+                usage_flags |= D3DUSAGE_WRITEONLY;
+
+            buffer = NULL;
+            hr = IDirect3DDevice9_CreateVertexBuffer(device, 0x10000, usage_flags, 0, d3dpool, &buffer, NULL);
+            if (usage_flags & D3DUSAGE_DYNAMIC && d3dpool == D3DPOOL_MANAGED)
+                todo_wine ok(!SUCCEEDED(hr), "Unexpected success to create vertex buffer, pool %s, usage_flags 0x%x, hr %#x.\n",
+                         debug_d3dpool(d3dpool), usage_flags, hr);
+            else
+                ok(SUCCEEDED(hr), "Failed to create vertex buffer, pool %s, usage 0x%x, hr %#x.\n",
+                                debug_d3dpool(d3dpool), usage_flags, hr);
+            if (FAILED(hr))
+                continue;
+
+            hr = IDirect3DDevice9_SetStreamSource(device, 0, buffer, 0, sizeof(quad_strip[0]));
+            ok(SUCCEEDED(hr), "Failed to set stream source, hr %#x.\n", hr);
+
+            lock_flags = 0;
+            if (i & 0x01)
+                lock_flags |= D3DLOCK_READONLY;
+            if (i & 0x02)
+                lock_flags |= D3DLOCK_DISCARD;
+            if (i & 0x04)
+                lock_flags |= D3DLOCK_NOOVERWRITE;
+            if (i & 0x08)
+                lock_flags |= D3DLOCK_NO_DIRTY_UPDATE;
+
+            for (j = 0; j < 0x20; j++) {
+                hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+                ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+                data = NULL;
+                hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+                ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+                if (FAILED(hr))
+                    continue;
+
+                memcpy(data, quad_strip, sizeof(quad_strip));
+
+                hr = IDirect3DVertexBuffer9_Unlock(buffer);
+                ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+                hr = IDirect3DDevice9_BeginScene(device);
+                ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+                hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+                ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+                hr = IDirect3DDevice9_EndScene(device);
+                ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+                /* modify buffer after draw call */
+                hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+                ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+                if (FAILED(hr))
+                    continue;
+                memcpy(data, quad_strip2, sizeof(quad_strip2));
+
+                hr = IDirect3DVertexBuffer9_Unlock(buffer);
+                ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+                get_rt_readback(backbuffer, &rb);
+                color = get_readback_color(&rb, 320, 240);
+                release_surface_readback(&rb);
+                if (color_match(color, 0xff7f007f, 1))
+                    break;
+            }
+            if ((pool == D3DPOOL_DEFAULT) && (lock_flags & D3DLOCK_NOOVERWRITE)) {
+                ok(color_match(color, 0xff7f007f, 1),
+                        "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                        color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else if ((pool == D3DPOOL_DEFAULT) && (lock_flags & D3DLOCK_READONLY) && (usage_flags & D3DUSAGE_DYNAMIC)) {
+                ok(color_match(color, 0xff7f007f, 1),
+                        "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                        color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            } else {
+                ok(color_match(color, 0xff008080, 1),
+                        "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                        color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+            }
+            IDirect3DVertexBuffer9_Release(buffer);
+        }
+    }
+
+    /* Test shows that in double lock case the last written value is used */
+    for (pool = 0; pool < 3; ++pool) {
+        d3dpool = get_pool[pool];
+        for (i = 0; i < 0x20; ++i) {
+            usage_flags = 0;
+            if (i & 0x10)
+                usage_flags |= D3DUSAGE_WRITEONLY;
+
+            buffer = NULL;
+            hr = IDirect3DDevice9_CreateVertexBuffer(device, 0x10000, usage_flags, 0, d3dpool, &buffer, NULL);
+            ok(SUCCEEDED(hr), "Failed to create vertex buffer, pool %s, usage 0x%x, hr %#x.\n",
+                            debug_d3dpool(d3dpool), usage_flags, hr);
+            if (FAILED(hr))
+                continue;
+
+            hr = IDirect3DDevice9_SetStreamSource(device, 0, buffer, 0, sizeof(quad_strip[0]));
+            ok(SUCCEEDED(hr), "Failed to set stream source, hr %#x.\n", hr);
+
+            lock_flags = 0;
+            if (i & 0x01)
+                lock_flags |= D3DLOCK_READONLY;
+            if (i & 0x02)
+                lock_flags |= D3DLOCK_DISCARD;
+            if (i & 0x04)
+                lock_flags |= D3DLOCK_NOOVERWRITE;
+            if (i & 0x08)
+                lock_flags |= D3DLOCK_NO_DIRTY_UPDATE;
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr))
+                continue;
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr))
+                continue;
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            data2 = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x2000, (void **)&data2, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr))
+                continue;
+
+            memcpy(data2, quad_strip2, sizeof(quad_strip2));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            ok(color_match(color, 0xff7f007f, 2),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+
+            hr = IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            ok(SUCCEEDED(hr), "Clear failed, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, 0);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr))
+                continue;
+
+            memset(data, 0, 0x1000);
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            data = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x1000, (void **)&data, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (FAILED(hr))
+                continue;
+
+            data2 = NULL;
+            hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0x2000, (void **)&data2, lock_flags);
+            ok(SUCCEEDED(hr), "Failed to lock vertex buffer, hr %#x.\n", hr);
+            if (!SUCCEEDED(hr))
+                continue;
+
+            memcpy(data2, quad_strip2, sizeof(quad_strip2));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            memcpy(data, quad_strip, sizeof(quad_strip));
+
+            hr = IDirect3DVertexBuffer9_Unlock(buffer);
+            ok(SUCCEEDED(hr), "Failed to unlock vertex buffer, hr %#x.\n", hr);
+
+            hr = IDirect3DDevice9_BeginScene(device);
+            ok(SUCCEEDED(hr), "Failed to begin scene, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, 0, 2);
+            ok(SUCCEEDED(hr), "Failed to draw, hr %#x.\n", hr);
+            hr = IDirect3DDevice9_EndScene(device);
+            ok(SUCCEEDED(hr), "Failed to end scene, hr %#x.\n", hr);
+
+            get_rt_readback(backbuffer, &rb);
+            color = get_readback_color(&rb, 320, 240);
+            release_surface_readback(&rb);
+
+            ok(color_match(color, 0xff008080, 1),
+                    "Got unexpected color 0x%08x, usage 0x%x, pool %s, case %s.\n",
+                    color, usage_flags, debug_d3dpool(d3dpool), debug_lock_flags(lock_flags));
+
+            IDirect3DVertexBuffer9_Release(buffer);
+        }
+    }
+#endif
+    IDirect3DSurface9_Release(backbuffer);
+
+    refcount = IDirect3DDevice9_Release(device);
+    ok(!refcount, "Device has %u references left.\n", refcount);
+    done:
+    IDirect3D9_Release(d3d9);
+    DestroyWindow(window);
+}
+
 START_TEST(visual)
 {
     D3DADAPTER_IDENTIFIER9 identifier;
@@ -21478,6 +22714,8 @@ START_TEST(visual)
             HIWORD(U(identifier.DriverVersion).LowPart), LOWORD(U(identifier.DriverVersion).LowPart));
 
     IDirect3D9_Release(d3d);
+    test_vb_lock_flags();
+    return;
 
     test_sanity();
     depth_clamp_test();
