@@ -30,6 +30,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3dadapter);
 
 #include <d3dadapter/d3dadapter9.h>
 #include "present.h"
+#include "device_wrap.h"
 
 /* this represents a snapshot taken at the moment of creation */
 struct output
@@ -396,7 +397,7 @@ d3dadapter9_GetAdapterMonitor( struct d3dadapter9 *This,
     return (HMONITOR)ADAPTER_OUTPUT.monitor;
 }
 
-static HRESULT WINAPI
+static HRESULT WINAPI DECLSPEC_HOTPATCH
 d3dadapter9_CreateDeviceEx( struct d3dadapter9 *This,
                             UINT Adapter,
                             D3DDEVTYPE DeviceType,
@@ -406,7 +407,7 @@ d3dadapter9_CreateDeviceEx( struct d3dadapter9 *This,
                             D3DDISPLAYMODEEX *pFullscreenDisplayMode,
                             IDirect3DDevice9Ex **ppReturnedDeviceInterface );
 
-static HRESULT WINAPI
+static HRESULT WINAPI DECLSPEC_HOTPATCH
 d3dadapter9_CreateDevice( struct d3dadapter9 *This,
                           UINT Adapter,
                           D3DDEVTYPE DeviceType,
@@ -454,7 +455,7 @@ d3dadapter9_GetAdapterDisplayModeEx( struct d3dadapter9 *This,
     return D3DERR_INVALIDCALL;
 }
 
-static HRESULT WINAPI
+static HRESULT WINAPI DECLSPEC_HOTPATCH
 d3dadapter9_CreateDeviceEx( struct d3dadapter9 *This,
                             UINT Adapter,
                             D3DDEVTYPE DeviceType,
@@ -514,6 +515,14 @@ d3dadapter9_CreateDeviceEx( struct d3dadapter9 *This,
         ID3DPresentGroup_Release(present);
     }
 
+    /* Nine returns different vtables for Ex, non Ex and
+     * if you use the multithread flag or not. This prevents
+     * things like Steam overlay to work, in addition to the problem
+     * that functions nine side are not recognized by wine as
+     * hotpatch-able. If possible, we use our vtable wrapper,
+     * which solves the problem described above. */
+    if (enable_device_vtable_wrapper())
+        (*ppReturnedDeviceInterface)->lpVtbl = get_device_vtable();
     return hr;
 }
 
