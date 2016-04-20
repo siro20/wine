@@ -1079,8 +1079,13 @@ fail:
 BOOL
 PRESENTTryFreePixmap(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv)
 {
-    PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
+    PRESENTpriv *present_priv;
     PRESENTPixmapPriv *current;
+
+    if (!present_pixmap_priv)
+        return TRUE;
+
+    present_priv = present_pixmap_priv->present_priv;
 
     pthread_mutex_lock(&present_priv->mutex_present);
 
