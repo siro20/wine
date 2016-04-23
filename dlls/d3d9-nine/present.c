@@ -668,7 +668,6 @@ LRESULT device_process_message(struct DRI3Present *present, HWND window, BOOL un
     }
     else if (message == WM_DISPLAYCHANGE)
     {
-        present->mode_changed = TRUE;
         /* Ex restores display mode, while non Ex requires the
          * user to call Device::Reset() */
         ZeroMemory(&current_mode, sizeof(DEVMODEW));
@@ -695,6 +694,8 @@ LRESULT device_process_message(struct DRI3Present *present, HWND window, BOOL un
             if (EnumDisplaySettingsW(present->devname, ENUM_REGISTRY_SETTINGS, &new_mode)) {
                 DRI3Present_ChangeDisplaySettingsIfNeccessary(present, &new_mode);
             }
+
+            present->mode_changed = TRUE;
 
             if (!present->no_window_changes &&
                     IsWindowVisible(present->params.hDeviceWindow))
@@ -822,10 +823,102 @@ static ID3DPresentVtbl DRI3Present_vtable = {
 };
 
 static HRESULT
+setup_fullscreen_window( struct DRI3Present *This,
+        HWND hwnd,
+        D3DPRESENT_PARAMETERS *params) {
+    boolean drop_wnd_messages;
+    LONG style, style_ex;
+
+    drop_wnd_messages = This->drop_wnd_messages;
+    This->drop_wnd_messages = TRUE;
+
+    This->style = GetWindowLongW(hwnd, GWL_STYLE);
+    This->style_ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+
+    style = fullscreen_style(This->style);
+    style_ex = fullscreen_exstyle(This->style_ex);
+
+    SetWindowLongW(hwnd, GWL_STYLE, style);
+    SetWindowLongW(hwnd, GWL_EXSTYLE, style_ex);
+
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, params->BackBufferWidth,
+                 params->BackBufferHeight,
+                 SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+
+    This->drop_wnd_messages = drop_wnd_messages;
+}
+
+static HRESULT
+move_fullscreen_window( struct DRI3Present *This,
+        HWND hwnd,
+        D3DPRESENT_PARAMETERS *params) {
+    boolean drop_wnd_messages;
+    LONG style, style_ex;
+
+    /* move draw window back to place */
+
+    style = GetWindowLongW(hwnd, GWL_STYLE);
+    style_ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+
+    style = fullscreen_style(style);
+    style_ex = fullscreen_exstyle(style_ex);
+
+    drop_wnd_messages = This->drop_wnd_messages;
+    This->drop_wnd_messages = TRUE;
+    SetWindowLongW(hwnd, GWL_STYLE, style);
+    SetWindowLongW(hwnd, GWL_EXSTYLE, style_ex);
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, params->BackBufferWidth,
+                 params->BackBufferHeight,
+                 SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    This->drop_wnd_messages = drop_wnd_messages;
+}
+
+static HRESULT
+restore_fullscreen_window( struct DRI3Present *This,
+        HWND hwnd,
+        D3DPRESENT_PARAMETERS *params) {
+    boolean drop_wnd_messages;
+    LONG style, style_ex;
+
+    /* switch from fullscreen to window */
+    style = GetWindowLongW(hwnd, GWL_STYLE);
+    style_ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+    /* These flags are set by us, not the
+     * application, and we want to ignore them in the test below, since it's
+     * not the application's fault that they changed. Additionally, we want to
+     * preserve the current status of these flags (i.e. don't restore them) to
+     * more closely emulate the behavior of Direct3D, which leaves these flags
+     * alone when returning to windowed mode. */
+    This->style ^= (This->style ^ style) & WS_VISIBLE;
+    This->style_ex ^= (This->style_ex ^ style_ex) & WS_EX_TOPMOST;
+
+    /* Only restore the style if the application didn't modify it during the
+     * fullscreen phase. Some applications change it before calling Reset()
+     * when switching between windowed and fullscreen modes (HL2), some
+     * depend on the original style (Eve Online). */
+    drop_wnd_messages = This->drop_wnd_messages;
+    This->drop_wnd_messages = TRUE;
+    if (style == fullscreen_style(This->style) && style_ex == fullscreen_exstyle(This->style_ex))
+    {
+        SetWindowLongW(hwnd, GWL_STYLE, style);
+        SetWindowLongW(hwnd, GWL_EXSTYLE, style_ex);
+    }
+    SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_FRAMECHANGED |
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                 SWP_NOACTIVATE); ERR("SetWindowPos() %d\n", __LINE__);
+    This->drop_wnd_messages = drop_wnd_messages;
+
+    This->style = 0;
+    This->style_ex = 0;
+}
+
+static HRESULT
 DRI3Present_ChangePresentParameters( struct DRI3Present *This,
                                     D3DPRESENT_PARAMETERS *params )
 {
     HWND draw_window = params->hDeviceWindow;
+    HWND focus_window = This->focus_wnd ? This->focus_wnd : draw_window;
+
     RECT rect;
     DEVMODEW new_mode;
     HRESULT hr;
@@ -846,11 +939,12 @@ DRI3Present_ChangePresentParameters( struct DRI3Present *This,
     }
 
     if ((This->params.BackBufferWidth != params->BackBufferWidth) ||
-        (This->params.BackBufferHeight != params->BackBufferHeight)) {
-        This->mode_changed = TRUE;
-    }
+        (This->params.BackBufferHeight != params->BackBufferHeight) ||
+        (This->params.Windowed != params->Windowed) ||
+        This->mode_changed) {
 
-    if (This->mode_changed || (This->params.Windowed != params->Windowed)) {
+        This->mode_changed = FALSE;
+
         if (!params->Windowed) {
             /* switch display mode */
             ZeroMemory(&new_mode, sizeof(DEVMODEW));
@@ -868,99 +962,36 @@ DRI3Present_ChangePresentParameters( struct DRI3Present *This,
         }
         if (hr != D3D_OK)
             return hr;
-        This->mode_changed = FALSE;
 
         if (This->params.Windowed) {
             if (!params->Windowed) {
                 /* switch from window to fullscreen */
-                if (nine_register_window(This->focus_wnd, This)) {
-                    if (This->focus_wnd != draw_window)
-                        SetWindowPos(This->focus_wnd, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
-                }
+                if (nine_register_window(focus_window, This))
+                    SetWindowPos(focus_window, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
 
-                drop_wnd_messages = This->drop_wnd_messages;
-                This->drop_wnd_messages = TRUE;
-
-                if (!This->no_window_changes) {
-                    This->style = GetWindowLongW(draw_window, GWL_STYLE);
-                    This->style_ex = GetWindowLongW(draw_window, GWL_EXSTYLE);
-
-                    style = fullscreen_style(This->style);
-                    style_ex = fullscreen_exstyle(This->style_ex);
-
-                    SetWindowLongW(draw_window, GWL_STYLE, style);
-                    SetWindowLongW(draw_window, GWL_EXSTYLE, style_ex);
-
-                    SetWindowPos(draw_window, HWND_TOPMOST, 0, 0, params->BackBufferWidth,
-                                 params->BackBufferHeight,
-                                 SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
-                }
-                This->drop_wnd_messages = drop_wnd_messages;
+                setup_fullscreen_window(This, draw_window, params);
             }
         } else {
             if (!params->Windowed) {
                 /* switch from fullscreen to fullscreen */
                 drop_wnd_messages = This->drop_wnd_messages;
                 This->drop_wnd_messages = TRUE;
+
                 MoveWindow(draw_window, 0, 0,
                         params->BackBufferWidth,
                         params->BackBufferHeight,
                         TRUE);
-                This->drop_wnd_messages = drop_wnd_messages;
-            } else if (!This->no_window_changes &&
-                       (This->style || This->style_ex)) {
-                /* switch from fullscreen to window */
-                style = GetWindowLongW(draw_window, GWL_STYLE);
-                style_ex = GetWindowLongW(draw_window, GWL_EXSTYLE);
-                /* These flags are set by us, not the
-                 * application, and we want to ignore them in the test below, since it's
-                 * not the application's fault that they changed. Additionally, we want to
-                 * preserve the current status of these flags (i.e. don't restore them) to
-                 * more closely emulate the behavior of Direct3D, which leaves these flags
-                 * alone when returning to windowed mode. */
-                This->style ^= (This->style ^ style) & WS_VISIBLE;
-                This->style_ex ^= (This->style_ex ^ style_ex) & WS_EX_TOPMOST;
 
-                /* Only restore the style if the application didn't modify it during the
-                 * fullscreen phase. Some applications change it before calling Reset()
-                 * when switching between windowed and fullscreen modes (HL2), some
-                 * depend on the original style (Eve Online). */
-                drop_wnd_messages = This->drop_wnd_messages;
-                This->drop_wnd_messages = TRUE;
-                if (style == fullscreen_style(This->style) && style_ex == fullscreen_exstyle(This->style_ex))
-                {
-                    SetWindowLongW(draw_window, GWL_STYLE, style);
-                    SetWindowLongW(draw_window, GWL_EXSTYLE, style_ex);
-                }
-                SetWindowPos(draw_window, 0, 0, 0, 0, 0, SWP_FRAMECHANGED |
-                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-                             SWP_NOACTIVATE);
                 This->drop_wnd_messages = drop_wnd_messages;
-
-                This->style = 0;
-                This->style_ex = 0;
+            } else if (This->style || This->style_ex) {
+                restore_fullscreen_window(This, draw_window, params);
             }
 
-            if (params->Windowed && !nine_unregister_window(This->focus_wnd))
-                ERR("Window %p is not registered with nine.\n", This->focus_wnd);
+            if (params->Windowed && !nine_unregister_window(focus_window))
+                ERR("Window %p is not registered with nine.\n", focus_window);
         }
     } else if (!params->Windowed) {
-        /* move draw window back to place */
-
-        style = GetWindowLongW(draw_window, GWL_STYLE);
-        style_ex = GetWindowLongW(draw_window, GWL_EXSTYLE);
-
-        style = fullscreen_style(style);
-        style_ex = fullscreen_exstyle(style_ex);
-
-        drop_wnd_messages = This->drop_wnd_messages;
-        This->drop_wnd_messages = TRUE;
-        SetWindowLongW(draw_window, GWL_STYLE, style);
-        SetWindowLongW(draw_window, GWL_EXSTYLE, style_ex);
-        SetWindowPos(draw_window, HWND_TOPMOST, 0, 0, params->BackBufferWidth,
-                     params->BackBufferHeight,
-                     SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
-        This->drop_wnd_messages = drop_wnd_messages;
+        move_fullscreen_window(This, draw_window, params);
     }
 
     This->params = *params;
@@ -977,9 +1008,10 @@ DRI3Present_new( Display *gdi_display,
                  boolean no_window_changes )
 {
     struct DRI3Present *This;
+    HWND focus_window;
+    DEVMODEW new_mode;
 
-    if (!focus_wnd) { focus_wnd = params->hDeviceWindow; }
-    if (!focus_wnd) {
+    if (!focus_wnd && !params->hDeviceWindow) {
         ERR("No focus HWND specified for presentation backend.\n");
         return D3DERR_INVALIDCALL;
     }
@@ -998,6 +1030,30 @@ DRI3Present_new( Display *gdi_display,
     This->params.Windowed = TRUE;
     This->ex = ex;
     This->no_window_changes = no_window_changes;
+
+    if (!params->Windowed) {
+        focus_window = focus_wnd ? focus_wnd : params->hDeviceWindow;
+        if (nine_register_window(focus_window, This)) {
+            if (focus_window != params->hDeviceWindow) {
+                SetWindowPos(focus_window, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
+            }
+        }
+    }
+    /* set display resolution */
+    ZeroMemory(&new_mode, sizeof(DEVMODEW));
+    new_mode.dmPelsWidth = params->BackBufferWidth;
+    new_mode.dmPelsHeight = params->BackBufferHeight;
+    new_mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+    if (params->FullScreen_RefreshRateInHz) {
+        new_mode.dmFields |= DM_DISPLAYFREQUENCY;
+        new_mode.dmDisplayFrequency = params->FullScreen_RefreshRateInHz;
+    }
+    new_mode.dmSize = sizeof(DEVMODEW);
+    DRI3Present_ChangeDisplaySettingsIfNeccessary(This, &new_mode);
+
+    This->params = *params;
+
+    setup_fullscreen_window(This, params->hDeviceWindow, params);
 
     strcpyW(This->devname, devname);
 
