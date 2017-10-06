@@ -695,6 +695,7 @@ XML2_LIBS
 XML2_CFLAGS
 PCAP_LIBS
 SED
+NINEWINECFG_LIBS
 X_EXTRA_LIBS
 X_LIBS
 X_PRE_LIBS
@@ -11636,6 +11637,7 @@ $as_echo "yes" >&6; }
         { $as_echo "$as_me:${as_lineno-$LINENO}: Checking for d3dadapter9 library dependencies" >&5
 $as_echo "$as_me: Checking for d3dadapter9 library dependencies" >&6;}
         D3D9NINE_LIBS=""
+        NINEWINECFG_LIBS=""
         D3D9NINE_MISSING_LIBS=""
         { $as_echo "$as_me:${as_lineno-$LINENO}: checking for xcb_request_check in -lxcb" >&5
 $as_echo_n "checking for xcb_request_check in -lxcb... " >&6; }
@@ -12126,6 +12128,7 @@ $as_echo "#define HAVE_D3D9NINE 1" >>confdefs.h
 cat >>confdefs.h <<_ACEOF
 #define D3D9NINE_MODULEPATH "`echo ${D3DADAPTER9_MODULEDIR}/d3dadapter9.so.1`"
 _ACEOF
+
 
             # Check module
             CPPFLAGSBAK=$CPPFLAGS
@@ -19598,6 +19601,7 @@ X_CFLAGS = $X_CFLAGS
 X_PRE_LIBS = $X_PRE_LIBS
 X_LIBS = $X_LIBS
 X_EXTRA_LIBS = $X_EXTRA_LIBS
+NINEWINECFG_LIBS = $NINEWINECFG_LIBS
 PCAP_LIBS = $PCAP_LIBS
 XML2_CFLAGS = $XML2_CFLAGS
 XML2_LIBS = $XML2_LIBS
