@@ -892,7 +892,8 @@ HRESULT d3dadapter9_new(Display *gdi_display, boolean ex, IDirect3D9Ex **ppOut)
     }
 
     *ppOut = (IDirect3D9Ex *)This;
-    FIXME("\033[1;32m\nNative Direct3D 9 is active."
-            "\nFor more information visit https://wiki.ixit.cz/d3d9\033[0m\n");
+
+    present_print_backend();
+
     return D3D_OK;
 }

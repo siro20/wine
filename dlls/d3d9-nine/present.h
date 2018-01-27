@@ -37,4 +37,6 @@ BOOL present_has_d3dadapter(Display *gdi_display);
 
 BOOL enable_device_vtable_wrapper(void);
 
+void present_print_backend(void);
+
 #endif /* __WINE_PRESENT_H */
