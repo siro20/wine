@@ -38,12 +38,14 @@ extern struct PRESENT_DRI_func DRI3func;
 #ifdef D3D9NINE_DRI2
 extern struct PRESENT_DRI_func DRI2func;
 #endif
+extern struct PRESENT_DRI_func Softwarefunc;
 
 static struct PRESENT_DRI_func *DRIbackends[] = {
         &DRI3func,
 #ifdef D3D9NINE_DRI2
         &DRI2func,
 #endif
+        &Softwarefunc,
 };
 
 BOOL PRESENTCheckExtension(Display *dpy, int major, int minor)

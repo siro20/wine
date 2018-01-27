@@ -1248,6 +1248,8 @@ OpenGL and Direct3D won't be supported.])
         test "x$ac_cv_lib_xcb_present_xcb_present_notify_msc" != xyes && D3D9NINE_MISSING_LIBS="${D3D9NINE_MISSING_LIBS}libxcb-present "
         AC_CHECK_LIB(xcb-xfixes,xcb_xfixes_create_region,[AC_SUBST(D3D9NINE_LIBS,["$D3D9NINE_LIBS -lxcb-xfixes"])])
         test "x$ac_cv_lib_xcb_xfixes_xcb_xfixes_create_region" != xyes && D3D9NINE_MISSING_LIBS="${D3D9NINE_MISSING_LIBS}libxcb-xfixes "
+        AC_CHECK_LIB(xcb-shm,xcb_shm_query_version_reply,[AC_SUBST(D3D9NINE_LIBS,["$D3D9NINE_LIBS -lxcb-shm"])])
+        test "x$ac_cv_lib_xcb_shm_xcb_shm_query_version_reply" != xyes && D3D9NINE_MISSING_LIBS="${D3D9NINE_MISSING_LIBS}libxcb-shm "
         AC_CHECK_LIB(X11-xcb,XGetXCBConnection,[AC_SUBST(D3D9NINE_LIBS,["$D3D9NINE_LIBS -lX11-xcb"])])
         test "x$ac_cv_lib_X11_xcb_XGetXCBConnection" != xyes && D3D9NINE_MISSING_LIBS="${D3D9NINE_MISSING_LIBS}libX11-xcb "
         AC_CHECK_LIB(X11,XOpenDisplay,[AC_SUBST(D3D9NINE_LIBS,["$D3D9NINE_LIBS -lX11"])])
