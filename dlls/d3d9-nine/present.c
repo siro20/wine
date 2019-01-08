@@ -36,6 +36,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3d9nine);
 
 #include "dri3.h"
 #include "wndproc.h"
+#include "backend.h"
 
 #include "wine/library.h" // for wine_dl*
 #include "wine/unicode.h" // for strcpyW
@@ -57,7 +58,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3d9nine);
 
 static const struct D3DAdapter9DRM *d3d9_drm = NULL;
 #ifdef D3D9NINE_DRI2
-static int is_dri2_fallback = 0;
+int is_dri2_fallback = 0;
 #endif
 
 /* Start section of x11drv.h */
@@ -1593,7 +1594,8 @@ HRESULT present_create_present_group(Display *gdi_display, const WCHAR *device_n
     return D3D_OK;
 }
 
-HRESULT present_create_adapter9(Display *gdi_display, HDC hdc, ID3DAdapter9 **out)
+HRESULT present_create_adapter9(Display *gdi_display, HDC hdc,
+        struct DRIBackend *dri_backend, ID3DAdapter9 **out)
 {
     struct x11drv_escape_get_drawable extesc = { X11DRV_GET_DRAWABLE };
     HRESULT hr;
@@ -1609,22 +1611,12 @@ HRESULT present_create_adapter9(Display *gdi_display, HDC hdc, ID3DAdapter9 **ou
             sizeof(extesc), (LPSTR)&extesc) <= 0)
         ERR("X11 drawable lookup failed (hdc=%p)\n", hdc);
 
-#ifdef D3D9NINE_DRI2
-    if (!is_dri2_fallback && !DRI3Open(gdi_display, DefaultScreen(gdi_display), &fd))
-#else
-    if (!DRI3Open(gdi_display, DefaultScreen(gdi_display), &fd))
-#endif
-    {
-        ERR("DRI3Open failed (fd=%d)\n", fd);
+    fd = DRIBackendFd(dri_backend);
+    if (fd < 0) {
+        ERR("Got invalid fd from DRIBackend (fd=%d)\n", fd);
         return D3DERR_DRIVERINTERNALERROR;
     }
-#ifdef D3D9NINE_DRI2
-    if (is_dri2_fallback && !DRI2FallbackOpen(gdi_display, DefaultScreen(gdi_display), &fd))
-    {
-        ERR("DRI2Open failed (fd=%d)\n", fd);
-        return D3DERR_DRIVERINTERNALERROR;
-    }
-#endif
+
     hr = d3d9_drm->create_adapter(fd, out);
     if (FAILED(hr))
     {
