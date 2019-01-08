@@ -35,15 +35,18 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3d9nine);
 #include "dri3.h"
 #include "backend.h"
 
+enum DRI_TYPE {
+    TYPE_INVALID = 0,
+    TYPE_DRI3,
+    TYPE_DRI2,
+};
+
 struct DRIBackend {
     Display *dpy;
     int fd;
     int screen;
+    enum DRI_TYPE type;
 };
-
-#ifdef D3D9NINE_DRI2
-int is_dri2_fallback;
-#endif
 
 BOOL DRIBackendOpen(Display *dpy, int screen, struct DRIBackend **dri_backend)
 {
@@ -58,15 +61,22 @@ BOOL DRIBackendOpen(Display *dpy, int screen, struct DRIBackend **dri_backend)
 
     (*dri_backend)->dpy = dpy;
     (*dri_backend)->screen = screen;
+    (*dri_backend)->type = TYPE_INVALID;
 
     if (DRI3Open(dpy, screen, &((*dri_backend)->fd)))
+    {
+        (*dri_backend)->type = TYPE_DRI3;
         return TRUE;
+    }
 
     ERR("DRI3Open failed (fd=%d)\n", (*dri_backend)->fd);
 
 #ifdef D3D9NINE_DRI2
-    if (is_dri2_fallback && DRI2FallbackOpen(dpy, screen, &((*dri_backend)->fd)))
+    if (DRI2FallbackOpen(dpy, screen, &((*dri_backend)->fd)))
+    {
+        (*dri_backend)->type = TYPE_DRI2;
         return TRUE;
+    }
     ERR("DRI2Open failed (fd=%d)\n", (*dri_backend)->fd);
 #endif
 
@@ -105,7 +115,7 @@ BOOL DRIBackendCheckExtension(Display *dpy)
         return FALSE;
 #else
         ERR("Unable to query DRI3. Trying DRI2 fallback (slower performance).\n");
-        is_dri2_fallback = 1;
+
         if (!DRI2FallbackCheckSupport(dpy))
         {
             ERR("DRI2 fallback unsupported\n");
@@ -135,7 +145,7 @@ BOOL DRIBackendD3DWindowBufferFromDmaBuf(struct DRIBackend *dri_backend,
         return FALSE;
 
 #ifdef D3D9NINE_DRI2
-    if (is_dri2_fallback)
+    if (dri_backend->type == TYPE_DRI2)
     {
         if (!DRI2FallbackPRESENTPixmap(present_priv, dri2_priv,
                 dmaBufFd, width, height, stride, depth,
@@ -167,13 +177,13 @@ BOOL DRIBackendD3DWindowBufferFromDmaBuf(struct DRIBackend *dri_backend,
     return TRUE;
 }
 
-BOOL DRIBackendHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv)
+BOOL DRIBackendHelperCopyFront(struct DRIBackend *dri_backend, PRESENTPixmapPriv *present_pixmap_priv)
 {
 #ifdef D3D9NINE_DRI2
-    if (is_dri2_fallback)
+    if (dri_backend->type == TYPE_DRI2)
         return FALSE;
 #endif
-    if (PRESENTHelperCopyFront(dpy, present_pixmap_priv))
+    if (PRESENTHelperCopyFront(dri_backend->dpy, present_pixmap_priv))
         return TRUE;
     else
         return FALSE;
@@ -184,7 +194,8 @@ BOOL DRIBackendInit(struct DRIBackend *dri_backend, struct DRI2priv **dri2_priv)
     TRACE("dri_backend=%p dri2_priv=%p\n", dri_backend, dri2_priv);
 
 #ifdef D3D9NINE_DRI2
-    if (is_dri2_fallback && !DRI2FallbackInit(dri_backend->dpy, dri2_priv))
+    if (dri_backend->type == TYPE_DRI2 &&
+           !DRI2FallbackInit(dri_backend->dpy, dri2_priv))
         return FALSE;
 #endif
     return TRUE;
@@ -195,7 +206,7 @@ void DRIBackendDestroy(struct DRIBackend *dri_backend, struct DRI2priv *dri2_pri
     TRACE("dri_backend=%p dri2_pri=%p\n", dri_backend, dri2_pri);
 
 #ifdef D3D9NINE_DRI2
-    if (is_dri2_fallback)
+    if (dri_backend->type == TYPE_DRI2)
         DRI2FallbackDestroy(dri2_pri);
 #endif
 }
