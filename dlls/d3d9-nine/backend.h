@@ -36,4 +36,6 @@ void DRIBackendClose(struct DRIBackend *dri_backend);
 
 int DRIBackendFd(struct DRIBackend *dri_backend);
 
+BOOL DRIBackendCheckExtension(Display *dpy);
+
 #endif /* __WINE_D3D9_NINE_BACKEND_H */

@@ -1783,20 +1783,10 @@ use_default_path:
         goto cleanup;
     }
 
-    if (!DRI3CheckExtension(gdi_display, 1, 0))
+    if (!DRIBackendCheckExtension(gdi_display))
     {
-#ifndef D3D9NINE_DRI2
-        ERR("Unable to query DRI3.\n");
+        ERR("Required extensions for DRIBackend not available.\n");
         goto cleanup;
-#else
-        ERR("Unable to query DRI3. Trying DRI2 fallback (slower performance).\n");
-        is_dri2_fallback = 1;
-        if (!DRI2FallbackCheckSupport(gdi_display))
-        {
-            ERR("DRI2 fallback unsupported\n");
-            goto cleanup;
-        }
-#endif
     }
 
     return TRUE;
