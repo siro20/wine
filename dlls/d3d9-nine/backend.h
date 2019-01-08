@@ -30,13 +30,14 @@
 
 struct DRIBackend;
 struct PRESENTpriv;
+struct PRESENTPixmapPriv;
 struct DRI2priv;
 typedef struct PRESENTPriv PRESENTpriv;
+typedef struct PRESENTPixmapPriv PRESENTPixmapPriv;
 
-struct PRESENTPixmapPriv;
 struct D3DWindowBuffer
 {
-    struct PRESENTPixmapPriv *present_pixmap_priv;
+    PRESENTPixmapPriv *present_pixmap_priv;
 };
 
 BOOL DRIBackendOpen(Display *dpy, int screen, struct DRIBackend **dri_backend);
@@ -51,5 +52,7 @@ BOOL DRIBackendD3DWindowBufferFromDmaBuf(struct DRIBackend *dri_backend,
         PRESENTpriv *present_priv, struct DRI2priv *dri2_priv,
         int dmaBufFd, int width, int height, int stride, int depth,
         int bpp, struct D3DWindowBuffer **out);
+
+BOOL DRIBackendHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv);
 
 #endif /* __WINE_D3D9_NINE_BACKEND_H */
