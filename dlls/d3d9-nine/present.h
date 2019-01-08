@@ -27,11 +27,11 @@
 
 #include <X11/Xlib.h>
 
+struct DRIBackend;
+
 HRESULT present_create_present_group(Display *gdi_display, const WCHAR *device_name, UINT adapter,
         HWND focus, D3DPRESENT_PARAMETERS *params, unsigned nparams, ID3DPresentGroup **group,
-        boolean ex, DWORD BehaviorFlags);
-
-struct DRIBackend;
+        boolean ex, DWORD BehaviorFlags, struct DRIBackend *dri_backend);
 
 HRESULT present_create_adapter9(Display *gdi_display, HDC hdc,
         struct DRIBackend *dri_backend, ID3DAdapter9 **adapter);
@@ -39,5 +39,6 @@ HRESULT present_create_adapter9(Display *gdi_display, HDC hdc,
 BOOL present_has_d3dadapter(Display *gdi_display);
 
 BOOL enable_device_vtable_wrapper(void);
+
 
 #endif /* __WINE_PRESENT_H */
