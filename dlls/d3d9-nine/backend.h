@@ -55,4 +55,6 @@ BOOL DRIBackendD3DWindowBufferFromDmaBuf(struct DRIBackend *dri_backend,
 
 BOOL DRIBackendHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv);
 
+BOOL DRIBackendInit(struct DRIBackend *dri_backend, struct DRI2priv **dri2_priv);
+
 #endif /* __WINE_D3D9_NINE_BACKEND_H */
