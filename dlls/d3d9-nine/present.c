@@ -1389,7 +1389,11 @@ static HRESULT DRI3Present_new(Display *gdi_display, const WCHAR *devname,
 
     strcpyW(This->devname, devname);
 
-    PRESENTInit(gdi_display, &(This->present_priv));
+    if (!PRESENTInit(gdi_display, &(This->present_priv)))
+    {
+        ERR("Failed to init Present backend\n");
+        return D3DERR_DRIVERINTERNALERROR;
+    }
 
     if (!DRIBackendInit(This->dri_backend, &(This->dri2_priv)))
     {
