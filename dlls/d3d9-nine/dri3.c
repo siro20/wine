@@ -907,7 +907,7 @@ static void PRESENTDestroyPixmapContent(PRESENTPixmapPriv *present_pixmap)
         ERR("Failed to free pixmap\n");
 }
 
-void PRESENTDestroy(Display *dpy, struct DRI2priv *dri2_priv, struct DRIBackend *dri_backend, PRESENTpriv *present_priv)
+void PRESENTDestroy(struct DRI2priv *dri2_priv, struct DRIBackend *dri_backend, PRESENTpriv *present_priv)
 {
     PRESENTPixmapPriv *current = NULL;
 
@@ -1116,7 +1116,7 @@ fail:
 
 #endif
 
-BOOL PRESENTTryFreePixmap(Display *dpy, struct DRI2priv *dri2_priv, struct DRIBackend *dri_backend, PRESENTPixmapPriv *present_pixmap_priv)
+BOOL PRESENTTryFreePixmap(struct DRI2priv *dri2_priv, struct DRIBackend *dri_backend, PRESENTPixmapPriv *present_pixmap_priv)
 {
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
     PRESENTPixmapPriv *current;
@@ -1148,7 +1148,7 @@ free_priv:
     return TRUE;
 }
 
-BOOL PRESENTHelperCopyFront(Display *dpy, PRESENTPixmapPriv *present_pixmap_priv)
+BOOL PRESENTHelperCopyFront(PRESENTPixmapPriv *present_pixmap_priv)
 {
     PRESENTpriv *present_priv = present_pixmap_priv->present_priv;
     xcb_void_cookie_t cookie;
