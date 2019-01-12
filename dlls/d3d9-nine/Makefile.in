@@ -11,6 +11,7 @@ C_SRCS = \
         dri3.c \
         wndproc.c \
         shader_validator.c \
-        backend.c
+        backend.c \
+        dri2.c
 
 RC_SRCS = version.rc

@@ -33,6 +33,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3d9nine);
 #include <stdlib.h>
 
 #include "dri3.h"
+#include "dri2.h"
 #include "backend.h"
 
 enum DRI_TYPE {
