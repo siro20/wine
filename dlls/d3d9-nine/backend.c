@@ -32,6 +32,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3d9nine);
 #include <windows.h>
 #include <stdlib.h>
 
+#include "xcb_present.h"
 #include "dri3.h"
 #include "dri2.h"
 #include "backend.h"
