@@ -12,7 +12,8 @@ branches:
   only:
   - master
 language: c
-os: xenial
+os: linux
+dist: xenial
 env:
   global:
     - TIMEOUT=1000
