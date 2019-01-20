@@ -11,6 +11,8 @@ addons:
 branches:
   only:
   - master
+language: c
+os: xenial
 env:
   global:
     - TIMEOUT=1000
