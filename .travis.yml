@@ -11,7 +11,7 @@ addons:
 branches:
   only:
   - master
-  - wine-stable-...
+  - /wine-stable-.../
 
 language: c
 dist: xenial
