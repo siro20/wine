@@ -11,20 +11,68 @@ addons:
 branches:
   only:
   - master
+  - wine-stable-...
+
 language: c
 dist: xenial
-env:
-  global:
-    - TIMEOUT=1000
-  matrix:
-    - CONFIGURE_ARGS=--enable-win64
-    #FIXME 32bit build
-script:
-  - ./configure --with-x --without-freetype --without-fontconfig --without-curses  --without-cms  --without-gstreamer  --without-alsa  --without-capi  --without-opencl  --without-openal  --without-netapi   --without-mpg123  --without-ldap  --without-krb5  --without-jpeg  --without-gnutls  --without-coreaudio  --without-dbus  --without-cups  --without-gsm  --without-osmesa  --without-oss   --without-pcap  --without-png  --without-pulse  --without-sane  --without-tiff  --without-udev  --without-v4l  --without-xinput  --without-xinput2  --without-xml  --without-xslt  --without-zlib  --with-d3d9-nine --disable-tests $CONFIGURE_ARGS
-  - make include
-  - make __builddeps__
-  - make d3d9-nine.dll.so -C dlls/d3d9-nine
-  - make d3d9-nine.dll.fake -C dlls/d3d9-nine
-  - make programs/ninewinecfg
 
+jobs:  
+  include:
+    - stage: master
+      name: "Build test master"
+      env:
+        - CONFIGURE_ARGS=--enable-win64
+      script:
+        - ./configure --with-x --without-freetype --without-fontconfig --without-curses  --without-cms  --without-gstreamer  --without-alsa  --without-capi  --without-opencl  --without-openal  --without-netapi   --without-mpg123  --without-ldap  --without-krb5  --without-jpeg  --without-gnutls  --without-coreaudio  --without-dbus  --without-cups  --without-gsm  --without-osmesa  --without-oss   --without-pcap  --without-png  --without-pulse  --without-sane  --without-tiff  --without-udev  --without-v4l  --without-xinput  --without-xinput2  --without-xml  --without-xslt  --without-zlib  --with-d3d9-nine --disable-tests $CONFIGURE_ARGS
+        - make include
+        - make __builddeps__
+        - make d3d9-nine.dll.so -C dlls/d3d9-nine
+        - make d3d9-nine.dll.fake -C dlls/d3d9-nine
+        - make programs/ninewinecfg
+
+    - stage: wine3
+      name: "Build test wine 3.0 stable branch"
+      env:
+        - CONFIGURE_ARGS=--enable-win64
+      script:
+        - ./configure --with-x --without-freetype --without-fontconfig --without-curses  --without-cms  --without-gstreamer  --without-alsa  --without-capi  --without-opencl  --without-openal  --without-netapi   --without-mpg123  --without-ldap  --without-krb5  --without-jpeg  --without-gnutls  --without-coreaudio  --without-dbus  --without-cups  --without-gsm  --without-osmesa  --without-oss   --without-pcap  --without-png  --without-pulse  --without-sane  --without-tiff  --without-udev  --without-v4l  --without-xinput  --without-xinput2  --without-xml  --without-xslt  --without-zlib  --with-d3d9-nine --disable-tests $CONFIGURE_ARGS
+        - make include
+        - make __builddeps__
+        - make d3d9-nine.dll.so -C dlls/d3d9-nine
+        - make d3d9-nine.dll.fake -C dlls/d3d9-nine
+        - make programs/ninewinecfg
+
+    - stage: wine2
+      name: "Build test wine 2.0 stable branch"
+      env:
+        - CONFIGURE_ARGS=--enable-win64
+      script:
+        - ./configure --with-x --without-freetype --without-fontconfig --without-curses  --without-cms  --without-gstreamer  --without-alsa  --without-capi  --without-opencl  --without-openal  --without-netapi   --without-mpg123  --without-ldap  --without-krb5  --without-jpeg  --without-gnutls  --without-coreaudio  --without-dbus  --without-cups  --without-gsm  --without-osmesa  --without-oss   --without-pcap  --without-png  --without-pulse  --without-sane  --without-tiff  --without-udev  --without-v4l  --without-xinput  --without-xinput2  --without-xml  --without-xslt  --without-zlib --without-glu --with-d3d9-nine --disable-tests $CONFIGURE_ARGS
+        - make include
+        - make __builddeps__
+        - make d3d9-nine.dll.so -C dlls/d3d9-nine
+        - make d3d9-nine.dll.fake -C dlls/d3d9-nine
+        - make programs/ninewinecfg
+
+    - stage: wine18
+      name: "Build test wine 1.8 stable branch"
+      env:
+        - CONFIGURE_ARGS=--enable-win64
+      script:
+        - ./configure --with-x --without-freetype --without-fontconfig --without-curses  --without-cms  --without-gstreamer  --without-alsa  --without-capi  --without-opencl  --without-openal  --without-netapi   --without-mpg123  --without-ldap  --without-krb5  --without-jpeg  --without-gnutls  --without-coreaudio  --without-dbus  --without-cups  --without-gsm  --without-osmesa  --without-oss   --without-pcap  --without-png  --without-pulse  --without-sane  --without-tiff  --without-udev  --without-v4l  --without-xinput  --without-xinput2  --without-xml  --without-xslt  --without-zlib --without-glu --with-d3d9-nine --disable-tests $CONFIGURE_ARGS
+        - make include   
+        - make __builddeps__
+        - make d3d9-nine.dll.so -C dlls/d3d9-nine
+        - make d3d9-nine.dll.fake -C dlls/d3d9-nine
+        - make programs/ninewinecfg
+
+stages:
+  - name: master
+    if: branch = master
+  - name: wine3
+    if: branch = wine-stable-3.0
+  - name: wine2
+    if: branch = wine-stable-2.0
+  - name: wine18
+    if: branch = wine-stable-1.8
 
